@@ -5,12 +5,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from camacdaq_py.camac_backend import CamacBackend
 
 def main():
-    ap = argparse.ArgumentParser(description="ctalk (Python) with real/mock backend")
-    ap.add_argument("--mode", choices=["auto","real","mock"], default="auto")
+    ap = argparse.ArgumentParser(description="ctalk (Python) with real/mock/visa backend")
+    ap.add_argument("--mode", choices=["auto","real","mock","visa"], default="auto")
     ap.add_argument("--lib", help="Path to CAMAC shared library (.so/.dylib/.dll)")
+    ap.add_argument("--resource", help="VISA resource string (e.g., GPIB0::1::INSTR)")
     args = ap.parse_args()
 
-    cam = CamacBackend(mode=args.mode, lib_path=args.lib)
+    cam = CamacBackend(mode=args.mode, lib_path=args.lib, resource=args.resource)
     cam.cdset(0,0)
 
     print("\n*****************************")

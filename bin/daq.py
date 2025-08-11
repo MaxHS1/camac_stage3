@@ -6,10 +6,11 @@ from camacdaq_py.camac_backend import CamacBackend
 from camacdaq_py.daq_system import DAQSystem
 
 def main():
-    ap = argparse.ArgumentParser(description="DAQ CLI (real/mock backend)")
+    ap = argparse.ArgumentParser(description="DAQ CLI (real/mock/visa backend)")
     ap.add_argument("--cfg", required=True, help="Path to CIT-style daq.cfg")
-    ap.add_argument("--mode", choices=["auto","real","mock"], default="auto", help="Backend selection")
+    ap.add_argument("--mode", choices=["auto","real","mock","visa"], default="auto", help="Backend selection")
     ap.add_argument("--lib", help="Path to CAMAC shared library (.so/.dylib/.dll)")
+    ap.add_argument("--resource", help="VISA resource string (e.g., GPIB0::1::INSTR)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="List modules")
@@ -27,7 +28,7 @@ def main():
 
     args = ap.parse_args()
 
-    cam = CamacBackend(mode=args.mode, lib_path=args.lib)
+    cam = CamacBackend(mode=args.mode, lib_path=args.lib, resource=args.resource)
     daq = DAQSystem(cam)
 
     text = pathlib.Path(args.cfg).read_text()
