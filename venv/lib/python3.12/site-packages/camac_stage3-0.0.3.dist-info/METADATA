@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: camac-stage3
+Version: 0.0.3
+Summary: Stage 3: DAQ with real/mock backend via ctypes
+Requires-Python: >=3.9

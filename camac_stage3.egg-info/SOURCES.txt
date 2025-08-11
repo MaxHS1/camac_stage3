@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+bin/ctalk.py
+bin/daq.py
+camac_stage3.egg-info/PKG-INFO
+camac_stage3.egg-info/SOURCES.txt
+camac_stage3.egg-info/dependency_links.txt
+camac_stage3.egg-info/top_level.txt
+camacdaq_py/camac_api.py
+camacdaq_py/camac_backend.py
+camacdaq_py/camac_lib.py
+camacdaq_py/config_parser.py
+camacdaq_py/daq_system.py

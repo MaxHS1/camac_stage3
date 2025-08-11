@@ -1,0 +1,3 @@
+bin
+camacdaq_py
+venv
