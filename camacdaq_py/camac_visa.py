@@ -1,73 +1,124 @@
-
-# camacdaq_py/camac_visa.py
-"""
-PyVISA backend for CAMAC over GPIB/VISA.
-
-NOTE: You must fill in the device's command protocol in _naf_* methods.
-Right now they return placeholder values so the app runs without crashing.
-"""
+# camac_visa.py — Kinetic Systems 3988 (GPIB) single-transfer N-A-F over VISA (binary)
 from __future__ import annotations
 from typing import Optional, Tuple
-import pyvisa
 
-def _pack_ext(branch:int, crate:int, station:int, address:int) -> int:
-    return ((branch & 0xFF) << 24) | ((crate & 0xFF) << 16) | ((station & 0xFF) << 8) | (address & 0xFF)
-
-def _unpack_ext(ext:int) -> Tuple[int,int,int,int]:
-    return ((ext>>24)&0xFF, (ext>>16)&0xFF, (ext>>8)&0xFF, ext&0xFF)
+try:
+    from pyvisa import ResourceManager
+except Exception as e:
+    raise ImportError("pyvisa is required for VISA mode") from e
 
 class CamacVisa:
-    def __init__(self, resource: str = "GPIB0::1::INSTR", timeout_ms: int = 2000, debug: int = 0):
-        self.rm = pyvisa.ResourceManager()
-        self.dev = self.rm.open_resource(resource)
-        self.dev.timeout = timeout_ms
-        self._debug = int(debug)
+    """
+    Minimal VISA backend for KS-3988 crate controller using BINARY N-A-F:
+      - Send exactly 3 bytes for a command: [N, A, F]
+      - For data reads/writes, exchange 1/2/3 bytes depending on module width
+      - Termination by EOI only (no string terminations)
+      - Optional 1-byte status may follow if SBE is enabled; we treat Q=True *only* if a status byte arrives and bit0 is set
+    """
 
-    def cdset(self, a:int, b:int):
-        if self._debug:
-            print(f"[VISA] cdset({a},{b})")
+    def __init__(self, resource: str, lib_path: Optional[str] = None, timeout_ms: int = 2000, width_bytes: int = 3):
+        rm = ResourceManager(lib_path) if lib_path else ResourceManager()
+        self.dev = rm.open_resource(resource)
+        # raw binary; no terminations
+        try:
+            self.dev.write_termination = None
+            self.dev.read_termination = None
+        except Exception:
+            pass
+        self.dev.timeout = int(timeout_ms)
+        self._debug = 0
+        self._width_bytes = int(width_bytes)  # 3=24-bit (default), 2=16-bit, 1=8-bit
 
-    def set_debug(self, level:int = 1):
+    # ----- required by backend -----
+    def set_debug(self, level: int) -> None:
         self._debug = int(level)
 
-    def cdreg(self, branch:int, crate:int, station:int, address:int) -> int:
-        if self._debug:
-            print(f"[VISA] cdreg b={branch} c={crate} n={station} a={address}")
-        return _pack_ext(branch, crate, station, address)
+    def cdreg(self, branch: int, crate: int, station: int, address: int) -> int:
+        return ((branch & 0xFF) << 24) | ((crate & 0xFF) << 16) | ((station & 0xFF) << 8) | (address & 0xFF)
 
-    def cfsa(self, function:int, ext:int, data: Optional[int] = None):
-        b,c,n,a = _unpack_ext(ext)
-        if 0 <= function <= 7:
-            return self._naf_read(b,c,n,a,function)
-        elif 16 <= function <= 23:
-            q = self._naf_write(b,c,n,a,function, 0 if data is None else int(data))
-            return (0 if data is None else int(data)), q
-        else:
-            q = self._naf_ctrl(b,c,n,a,function)
+    def cfsa(self, function: int, ext: int, data: Optional[int] = None) -> Tuple[int, bool]:
+        b = (ext >> 24) & 0xFF
+        c = (ext >> 16) & 0xFF
+        n = (ext >> 8) & 0xFF
+        a = ext & 0xFF
+        if 0 <= function <= 7:                # READ
+            return self._naf_read(b, c, n, a, function)
+        elif 16 <= function <= 23:            # WRITE
+            d = int(0 if data is None else data)
+            q = self._naf_write(b, c, n, a, function, d)
+            return d, q
+        else:                                 # CONTROL
+            q = self._naf_ctrl(b, c, n, a, function)
             return 0, q
 
-    # --------- FILL THESE WITH YOUR DEVICE'S REAL COMMANDS ----------
-    def _naf_read(self, b:int, c:int, n:int, a:int, f:int):
-        # Example placeholder (replace with real IO):
-        # self.dev.write(f"NAF:READ {b},{c},{n},{a},{f}")
-        # resp = self.dev.read()
-        # data, q = parse_resp(resp)
+    # ----- low-level helpers -----
+    def _send_naf(self, n: int, a: int, f: int) -> None:
+        payload = bytes([(n & 0xFF), (a & 0xFF), (f & 0xFF)])
         if self._debug:
-            print(f"[VISA] READ NAF b={b} c={c} n={n} a={a} f={f}")
-        data = ((c & 0xFF) << 8) ^ ((n & 0xFF) << 4) ^ (a & 0xF) ^ (f << 12)
-        q = True
-        return data & 0xFFFFFF, q
+            print("[WRITE RAW NAF]", list(payload))
+        self.dev.write_raw(payload)
 
-    def _naf_write(self, b:int, c:int, n:int, a:int, f:int, data:int) -> bool:
-        # Example placeholder (replace with real IO):
-        # self.dev.write(f"NAF:WRITE {b},{c},{n},{a},{f},{data}")
+    def _read_data(self) -> int:
+        nbytes = self._width_bytes
+        raw = self.dev.read_bytes(nbytes)
         if self._debug:
-            print(f"[VISA] WRITE NAF b={b} c={c} n={n} a={a} f={f} data={data}")
-        return True
+            print(f"[READ RAW DATA{8*nbytes}]", list(raw))
+        if nbytes == 3:
+            return ((raw[0] << 16) | (raw[1] << 8) | raw[2]) & 0xFFFFFF
+        if nbytes == 2:
+            return ((raw[0] << 8) | raw[1]) & 0xFFFF
+        return raw[0] & 0xFF
 
-    def _naf_ctrl(self, b:int, c:int, n:int, a:int, f:int) -> bool:
-        # Example placeholder (replace with real IO):
-        # self.dev.write(f"NAF:CTRL {b},{c},{n},{a},{f}")
+    def _write_data(self, data: int) -> None:
+        nbytes = self._width_bytes
+        if nbytes == 3:
+            d = data & 0xFFFFFF
+            payload = bytes([(d >> 16) & 0xFF, (d >> 8) & 0xFF, d & 0xFF])
+        elif nbytes == 2:
+            d = data & 0xFFFF
+            payload = bytes([(d >> 8) & 0xFF, d & 0xFF])
+        else:
+            d = data & 0xFF
+            payload = bytes([d])
         if self._debug:
-            print(f"[VISA] CTRL NAF b={b} c={c} n={n} a={a} f={f}")
-        return True
+            print(f"[WRITE RAW DATA{8*nbytes}]", list(payload))
+        self.dev.write_raw(payload)
+
+    def _read_status_byte_if_enabled(self) -> Optional[int]:
+        try:
+            orig = self.dev.timeout
+        except Exception:
+            orig = None
+        try:
+            if orig is not None:
+                self.dev.timeout = 5
+            sb = self.dev.read_bytes(1)
+            if self._debug:
+                print("[READ STATUS BYTE]", list(sb))
+            return sb[0]
+        except Exception:
+            return None
+        finally:
+            if orig is not None:
+                self.dev.timeout = orig
+
+    # ----- N-A-F primitives -----
+    def _naf_read(self, b: int, c: int, n: int, a: int, f: int) -> Tuple[int, bool]:
+        self._send_naf(n, a, f)
+        data = self._read_data()
+        sb = self._read_status_byte_if_enabled()
+        q = bool(sb & 0x01) if sb is not None else False
+        return data, q
+
+    def _naf_write(self, b: int, c: int, n: int, a: int, f: int, data: int) -> bool:
+        self._send_naf(n, a, f)
+        self._write_data(data)
+        sb = self._read_status_byte_if_enabled()
+        q = bool(sb & 0x01) if sb is not None else False
+        return q
+
+    def _naf_ctrl(self, b: int, c: int, n: int, a: int, f: int) -> bool:
+        self._send_naf(n, a, f)
+        sb = self._read_status_byte_if_enabled()
+        q = bool(sb & 0x01) if sb is not None else False
+        return q
